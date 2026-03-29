@@ -25,10 +25,10 @@ local skippedEggs         = {}
 local retryEgg           = nil
 local targetEgg           = nil
 local isPathfinding       = false
-local autoCollect         = true
+local autoCollect         = false
 local espEnabled          = true
 local heightFilterEnabled = true
-local MAX_EGG_HEIGHT      = 150
+local MAX_EGG_HEIGHT      = 100
 
 -- Reset by stop / ESP off (legacy hook)
 local lastResetStuckAt = 0
@@ -900,7 +900,7 @@ local espPage = pages.ESP
 
 makeSectionLabel(espPage, 8, "Detection")
 local espToggleBtn, espSet, espGet = makeToggle(espPage, 26, "ESP Labels", "E", true, Color3.fromRGB(80,220,120))
-local autoToggleBtn, autoSet, autoGet = makeToggle(espPage, 68, "Auto Collect", "G", true, Color3.fromRGB(80,220,120))
+local autoToggleBtn, autoSet, autoGet = makeToggle(espPage, 68, "Auto Collect", "G", false, Color3.fromRGB(80,220,120))
 local heightToggleBtn, heightSet, heightGet = makeToggle(espPage, 110, "Height Filter", "", true, Color3.fromRGB(255,180,60))
 
 local maxYBox = makeSmallInput(espPage, 154, "Max Y", MAX_EGG_HEIGHT)

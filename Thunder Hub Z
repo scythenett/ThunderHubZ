@@ -3,6 +3,7 @@ local RunService          = game:GetService("RunService")
 local PathfindingService  = game:GetService("PathfindingService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService    = game:GetService("UserInputService")
+local GuiService            = game:GetService("GuiService")
 local TweenService        = game:GetService("TweenService")
 
 local player    = Players.LocalPlayer
@@ -31,28 +32,80 @@ local MAX_EGG_HEIGHT      = 100
 
 -- Reset by stop / ESP off (legacy hook)
 local lastResetStuckAt = 0
-local function resetStuckTracker()
-    if tick() - lastResetStuckAt < 4 then return end
-    lastResetStuckAt = tick()
 
-    -- UI reset helper for when movement/pathfinding gets stuck.
-    -- Wrapped in pcall so keybind changes in some game modes won't break anything.
+local function prefersTouchReset()
+    local ok, pref = pcall(function()
+        return UserInputService.PreferredInput
+    end)
+    if ok and pref == Enum.PreferredInput.Touch then
+        return true
+    end
+    return UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+end
+
+-- Mobile: no physical ESC/R/Enter — use taps (menu/back zone + confirm) + optional key inject.
+local function resetStuckTrackerMobile()
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local vs = cam.ViewportSize
+        local inset = GuiService:GetGuiInset()
+        local insetTop = inset and inset.Y or 0
+        local insetLeft = inset and inset.X or 0
+
+        local function tapScreen(px, py)
+            VirtualInputManager:SendMouseButtonEvent(px, py, 0, true, game, 0)
+            task.wait(0.04)
+            VirtualInputManager:SendMouseButtonEvent(px, py, 0, false, game, 0)
+        end
+
+        -- Top-left: Roblox menu / back (closest analogue to Escape).
+        tapScreen(math.max(insetLeft + 8, vs.X * 0.06), math.max(insetTop + 10, vs.Y * 0.06))
+        task.wait(0.12)
+        -- Mid-screen: many games put Retry / action row here (R analogue).
+        tapScreen(vs.X * 0.5, vs.Y * 0.42)
+        task.wait(0.1)
+        -- Some clients still accept injected keys (external keyboard / executor).
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+        task.wait(0.03)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+        task.wait(0.06)
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+        task.wait(0.03)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+        task.wait(0.08)
+        -- Bottom-center: confirm / dismiss (Enter analogue).
+        tapScreen(vs.X * 0.5, math.min(vs.Y - 12, vs.Y * 0.62))
+    end)
+end
+
+local function resetStuckTrackerPC()
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
         task.wait(0.05)
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Escape, false, game)
         task.wait(0.08)
 
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.L, false, game)
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.R, false, game)
         task.wait(0.05)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.L, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.R, false, game)
         task.wait(0.08)
 
-        -- Roblox uses `Return` for Enter.
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
         task.wait(0.05)
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
     end)
+end
+
+local function resetStuckTracker()
+    if tick() - lastResetStuckAt < 4 then return end
+    lastResetStuckAt = tick()
+
+    if prefersTouchReset() then
+        resetStuckTrackerMobile()
+    else
+        resetStuckTrackerPC()
+    end
 end
 
 -- Aura name to equip (change to your preferred aura)
@@ -407,6 +460,25 @@ counterLbl.Font               = Enum.Font.GothamBold
 counterLbl.TextXAlignment     = Enum.TextXAlignment.Right
 counterLbl.ZIndex             = 6
 counterLbl.Parent             = topBar
+
+-- Minimize (collapse to top bar only)
+local guiMinimized = false
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Name = "Minimize"
+minimizeBtn.Size = UDim2.new(0, 28, 0, 24)
+minimizeBtn.Position = UDim2.new(1, -180, 0.5, -12)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 34)
+minimizeBtn.BorderSizePixel = 0
+minimizeBtn.Text = "−"
+minimizeBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
+minimizeBtn.TextSize = 18
+minimizeBtn.Font = Enum.Font.GothamBold
+minimizeBtn.AutoButtonColor = true
+minimizeBtn.ZIndex = 7
+minimizeBtn.Parent = topBar
+local minBtnCorner = Instance.new("UICorner")
+minBtnCorner.CornerRadius = UDim.new(0, 6)
+minBtnCorner.Parent = minimizeBtn
 
 -- ── BODY (below topbar) ──────────────────────────────────────
 local body = Instance.new("Frame")
@@ -1039,6 +1111,11 @@ end
 
 local function switchTab(name)
     activeTab = name
+    if guiMinimized then
+        guiMinimized = false
+        body.Visible = true
+        minimizeBtn.Text = "−"
+    end
     local col = TAB_COLORS[name]
     for _, tabName in ipairs(TABS) do
         local t = tabBtns[tabName]
@@ -1062,6 +1139,28 @@ local function switchTab(name)
         Size = UDim2.new(0, TOTAL_W, 0, TAB_HEIGHTS[name] or 320)
     }):Play()
 end
+
+local function setGuiMinimized(min)
+    guiMinimized = min
+    if min then
+        body.Visible = false
+        minimizeBtn.Text = "+"
+        TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(0, TOTAL_W, 0, 38)
+        }):Play()
+    else
+        body.Visible = true
+        minimizeBtn.Text = "−"
+        local h = TAB_HEIGHTS[activeTab] or 320
+        TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(0, TOTAL_W, 0, h)
+        }):Play()
+    end
+end
+
+minimizeBtn.Activated:Connect(function()
+    setGuiMinimized(not guiMinimized)
+end)
 
 for _, tabName in ipairs(TABS) do
     tabBtns[tabName].btn.MouseButton1Click:Connect(function()

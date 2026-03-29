@@ -5,7 +5,6 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService    = game:GetService("UserInputService")
 local GuiService            = game:GetService("GuiService")
 local TweenService        = game:GetService("TweenService")
-local HttpService         = game:GetService("HttpService")
 
 local player    = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
@@ -30,130 +29,6 @@ local autoCollect         = true
 local espEnabled          = true
 local heightFilterEnabled = true
 local MAX_EGG_HEIGHT      = 150
-
--- ============================================================
--- NAMED CONFIGS (local persistence best-effort)
--- ============================================================
-local CONFIG_FILE = "eggscript_configs_v1.json"
-local CONFIG_ENV_KEY = "EggscriptConfigStoreV1"
-
-local selectedConfigName = "Default"
-local configAutoLoad = true
-
-local configStore = nil -- {selected=string, autoLoad=bool, configs={ [name]= {autoCollect=bool,heightFilterEnabled=bool,MAX_EGG_HEIGHT=number} } }
-
-local function trim(s)
-    return (s:gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
-local function normalizeConfigName(name)
-    name = trim(name or "")
-    if name == "" then return "" end
-    -- Keep it simple: replace whitespace with underscores.
-    name = name:gsub("%s+", "_")
-    return name
-end
-
-local function makeDefaultConfig()
-    return {
-        autoCollect = autoCollect,
-        heightFilterEnabled = heightFilterEnabled,
-        MAX_EGG_HEIGHT = MAX_EGG_HEIGHT,
-    }
-end
-
-local function applyConfig(cfg)
-    if type(cfg) ~= "table" then return end
-    if cfg.autoCollect ~= nil then autoCollect = cfg.autoCollect end
-    if cfg.heightFilterEnabled ~= nil then heightFilterEnabled = cfg.heightFilterEnabled end
-    if cfg.MAX_EGG_HEIGHT ~= nil then MAX_EGG_HEIGHT = cfg.MAX_EGG_HEIGHT end
-end
-
-local function getGlobalStore()
-    local ok, ge = pcall(function()
-        return getgenv and getgenv() or nil
-    end)
-    if ok and ge then
-        ge[CONFIG_ENV_KEY] = ge[CONFIG_ENV_KEY] or { selected = "Default", autoLoad = true, configs = {} }
-        return ge[CONFIG_ENV_KEY]
-    end
-    _G[CONFIG_ENV_KEY] = _G[CONFIG_ENV_KEY] or { selected = "Default", autoLoad = true, configs = {} }
-    return _G[CONFIG_ENV_KEY]
-end
-
-local function tryLoadConfigsFromFile()
-    if type(readfile) ~= "function" then return nil end
-    local ok, raw = pcall(function()
-        return readfile(CONFIG_FILE)
-    end)
-    if not ok or not raw or raw == "" then return nil end
-    local ok2, decoded = pcall(function()
-        return HttpService:JSONDecode(raw)
-    end)
-    if not ok2 or type(decoded) ~= "table" then return nil end
-    return decoded
-end
-
-local function trySaveConfigsToFile(store)
-    if type(writefile) ~= "function" then return end
-    local ok, raw = pcall(function()
-        return HttpService:JSONEncode(store)
-    end)
-    if not ok or not raw then return end
-    pcall(function()
-        writefile(CONFIG_FILE, raw)
-    end)
-end
-
-local function loadConfigStore()
-    local fromFile = tryLoadConfigsFromFile()
-    if type(fromFile) == "table" then
-        configStore = fromFile
-    else
-        configStore = getGlobalStore()
-    end
-
-    if type(configStore) ~= "table" then
-        configStore = { selected = "Default", autoLoad = true, configs = {} }
-    end
-
-    configStore.configs = configStore.configs or {}
-    configStore.selected = normalizeConfigName(configStore.selected) ~= "" and normalizeConfigName(configStore.selected) or "Default"
-    configStore.autoLoad = configStore.autoLoad ~= false
-
-    -- Ensure Default always exists.
-    if not configStore.configs["Default"] then
-        configStore.configs["Default"] = makeDefaultConfig()
-    end
-
-    -- Apply selected config if enabled.
-    selectedConfigName = configStore.selected or "Default"
-    configAutoLoad = configStore.autoLoad
-    if configAutoLoad then
-        applyConfig(configStore.configs[selectedConfigName] or configStore.configs["Default"])
-    end
-end
-
-local function persistConfigStore()
-    if type(configStore) ~= "table" then return end
-    configStore.selected = selectedConfigName
-    configStore.autoLoad = configAutoLoad
-
-    -- Store a copy of the current defaults if nothing exists.
-    configStore.configs = configStore.configs or {}
-    if not configStore.configs["Default"] then
-        configStore.configs["Default"] = makeDefaultConfig()
-    end
-
-    -- Save to global env (session persistence) and to file when available.
-    local gs = getGlobalStore()
-    gs.selected = configStore.selected
-    gs.autoLoad = configStore.autoLoad
-    gs.configs = configStore.configs
-    trySaveConfigsToFile(configStore)
-end
-
-loadConfigStore()
 
 -- Reset by stop / ESP off (legacy hook)
 local lastResetStuckAt = 0
@@ -477,13 +352,12 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent         = player.PlayerGui
 
 -- Sidebar tabs
-local TABS = {"ESP", "Config", "Aura", "Quests", "Items", "Perf"}
+local TABS = {"ESP", "Aura", "Quests", "Items", "Perf"}
 local activeTab = "ESP"
 
 -- Tab accent colors
 local TAB_COLORS = {
     ESP    = Color3.fromRGB(80,  220, 120),
-    Config = Color3.fromRGB(140, 200, 255),
     Aura   = Color3.fromRGB(180, 120, 255),
     Quests = Color3.fromRGB(255, 200,  60),
     Items  = Color3.fromRGB(255, 140,  60),
@@ -493,7 +367,6 @@ local TAB_COLORS = {
 -- Tab icons (unicode)
 local TAB_ICONS = {
     ESP    = "◈",
-    Config = "⚙",
     Aura   = "✦",
     Quests = "❐",
     Items  = "⬡",
@@ -970,22 +843,14 @@ local function makeCalibBtn(parent, y, label, calKey)
     end
     refresh()
 
-    local lastStart = 0
-    local function beginCalib()
-        local now = tick()
-        if now - lastStart < 0.25 then return end
-        lastStart = now
-
+    btn.MouseButton1Click:Connect(function()
         calibWaiting = {key = calKey, refresh = refresh}
         lbl.Text       = label .. "  [click target...]"
         lbl.TextColor3 = Color3.fromRGB(255,220,80)
         dot.BackgroundColor3 = Color3.fromRGB(255,220,80)
         bs.Color = Color3.fromRGB(255,220,80)
         setStatus("Click the spot: " .. label, Color3.fromRGB(255,220,80))
-    end
-
-    btn.MouseButton1Click:Connect(beginCalib)
-    btn.Activated:Connect(beginCalib)
+    end)
 
     btn.MouseEnter:Connect(function()
         TweenService:Create(btn,TweenInfo.new(0.12),{BackgroundColor3=Color3.fromRGB(18,18,28)}):Play()
@@ -999,19 +864,10 @@ end
 
 -- Global click capture for calibration
 UserInputService.InputBegan:Connect(function(input, processed)
-    if calibWaiting and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
-        -- Mobile touch doesn't always register as MouseButton1, so handle both.
-        -- Prefer input.Position for touch; fall back to GetMouseLocation for mouse.
-        local x, y
-        if input.UserInputType == Enum.UserInputType.Touch and input.Position then
-            x = math.floor(input.Position.X)
-            y = math.floor(input.Position.Y)
-        else
-            local pos = UserInputService:GetMouseLocation()
-            x = math.floor(pos.X)
-            y = math.floor(pos.Y)
-        end
-        CAL[calibWaiting.key] = {x = x, y = y}
+    if calibWaiting and input.UserInputType == Enum.UserInputType.MouseButton1 then
+        -- Use GetMouseLocation() for accurate pixel position (input.Position has Z offset issues)
+        local pos = UserInputService:GetMouseLocation()
+        CAL[calibWaiting.key] = {x = math.floor(pos.X), y = math.floor(pos.Y)}
         local cw = calibWaiting
         calibWaiting = nil
         cw.refresh()
@@ -1044,8 +900,8 @@ local espPage = pages.ESP
 
 makeSectionLabel(espPage, 8, "Detection")
 local espToggleBtn, espSet, espGet = makeToggle(espPage, 26, "ESP Labels", "E", true, Color3.fromRGB(80,220,120))
-local autoToggleBtn, autoSet, autoGet = makeToggle(espPage, 68, "Auto Collect", "G", autoCollect, Color3.fromRGB(80,220,120))
-local heightToggleBtn, heightSet, heightGet = makeToggle(espPage, 110, "Height Filter", "", heightFilterEnabled, Color3.fromRGB(255,180,60))
+local autoToggleBtn, autoSet, autoGet = makeToggle(espPage, 68, "Auto Collect", "G", true, Color3.fromRGB(80,220,120))
+local heightToggleBtn, heightSet, heightGet = makeToggle(espPage, 110, "Height Filter", "", true, Color3.fromRGB(255,180,60))
 
 local maxYBox = makeSmallInput(espPage, 154, "Max Y", MAX_EGG_HEIGHT)
 maxYBox.FocusLost:Connect(function()
@@ -1171,157 +1027,6 @@ local applyPerfBtn = makeActionBtn(perfPage, 366, "Re-Apply All", Color3.fromRGB
 
 perfPage.CanvasSize = UDim2.new(0,0,0, 408)
 
--- ── CONFIG PAGE ─────────────────────────────────────────────
-pages.Config = makePage()
-local configPage = pages.Config
-
-makeSectionLabel(configPage, 8, "Collection Config")
-local cfgAutoToggleBtn, cfgAutoSet, cfgAutoGet = makeToggle(
-    configPage, 26, "Auto Collect", "", autoCollect, Color3.fromRGB(80,220,120)
-)
-cfgAutoToggleBtn.MouseButton1Click:Connect(function()
-    local on = not cfgAutoGet()
-    cfgAutoSet(on)
-    autoCollect = on
-    -- Keep ESP tab toggle in sync if it's visible.
-    pcall(function()
-        autoSet(on)
-    end)
-end)
-
-local cfgHeightToggleBtn, cfgHeightSet, cfgHeightGet = makeToggle(
-    configPage, 68, "Height Filter", "", heightFilterEnabled, Color3.fromRGB(255,180,60)
-)
-cfgHeightToggleBtn.MouseButton1Click:Connect(function()
-    local on = not cfgHeightGet()
-    cfgHeightSet(on)
-    heightSet(on)
-    heightFilterEnabled = on
-end)
-
-local cfgMaxYBox = makeSmallInput(configPage, 154, "Max Y", MAX_EGG_HEIGHT)
-cfgMaxYBox.FocusLost:Connect(function()
-    local v = tonumber(cfgMaxYBox.Text)
-    if v then
-        MAX_EGG_HEIGHT = v
-        pcall(function() maxYBox.Text = tostring(MAX_EGG_HEIGHT) end)
-        setStatus("Max Y = " .. v, Color3.fromRGB(255,180,60))
-    else
-        cfgMaxYBox.Text = tostring(MAX_EGG_HEIGHT)
-    end
-end)
-
-makeDivider(configPage, 186)
-makeSectionLabel(configPage, 192, "Named Configs")
-
-local cfgNameBox = makeSmallInput(configPage, 210, "Config Name", selectedConfigName)
-local cfgSelectedBox = makeSmallInput(configPage, 242, "Selected Name", selectedConfigName)
-
-local cfgAutoLoadToggleBtn, cfgAutoLoadSet, cfgAutoLoadGet = makeToggle(
-    configPage, 276, "Auto-load Selected", "", configAutoLoad, Color3.fromRGB(140,200,255)
-)
-cfgAutoLoadToggleBtn.MouseButton1Click:Connect(function()
-    local on = not cfgAutoLoadGet()
-    cfgAutoLoadSet(on)
-    configAutoLoad = on
-    persistConfigStore()
-    if on then
-        pcall(function()
-            loadConfigIntoVars(cfgSelectedBox.Text)
-        end)
-    end
-    setStatus(on and "Auto-load ON" or "Auto-load OFF", on and Color3.fromRGB(140,200,255) or Color3.fromRGB(220,80,80))
-end)
-
-local function syncUIFromVars()
-    pcall(function()
-        autoSet(autoCollect)
-        heightSet(heightFilterEnabled)
-        cfgAutoSet(autoCollect)
-        cfgHeightSet(heightFilterEnabled)
-        cfgMaxYBox.Text = tostring(MAX_EGG_HEIGHT)
-        if maxYBox then maxYBox.Text = tostring(MAX_EGG_HEIGHT) end
-    end)
-end
-
-local function loadConfigIntoVars(name)
-    name = normalizeConfigName(name)
-    if name == "" then return false end
-    local cfg = configStore and configStore.configs and configStore.configs[name]
-    if type(cfg) ~= "table" then return false end
-
-    selectedConfigName = name
-    applyConfig(cfg)
-    syncUIFromVars()
-    return true
-end
-
-local function saveVarsAsConfig(name)
-    name = normalizeConfigName(name)
-    if name == "" then return false end
-    configStore.configs = configStore.configs or {}
-    configStore.configs[name] = {
-        autoCollect = autoCollect,
-        heightFilterEnabled = heightFilterEnabled,
-        MAX_EGG_HEIGHT = MAX_EGG_HEIGHT,
-    }
-    selectedConfigName = name
-    configStore.selected = name
-    persistConfigStore()
-    return true
-end
-
-local cfgSaveBtn = makeActionBtn(configPage, 314, "Save / Update Config", Color3.fromRGB(255,200,60))
-cfgSaveBtn.MouseButton1Click:Connect(function()
-    local name = trim(cfgNameBox.Text)
-    if name == "" then setStatus("Enter a config name first", Color3.fromRGB(220,80,80)); return end
-    name = normalizeConfigName(name)
-    if saveVarsAsConfig(name) then
-        cfgSelectedBox.Text = name
-        pcall(function()
-            selectedConfigName = name
-            configStore.selected = name
-        end)
-        setStatus("Saved config: " .. name, Color3.fromRGB(255,200,60))
-    else
-        setStatus("Invalid config name", Color3.fromRGB(220,80,80))
-    end
-end)
-
-local cfgLoadBtn = makeActionBtn(configPage, 352, "Load Selected Config", Color3.fromRGB(80,220,120))
-cfgLoadBtn.MouseButton1Click:Connect(function()
-    local name = trim(cfgSelectedBox.Text)
-    if name == "" then setStatus("Select a config name first", Color3.fromRGB(220,80,80)); return end
-    name = normalizeConfigName(name)
-    if loadConfigIntoVars(name) then
-        setStatus("Loaded config: " .. name, Color3.fromRGB(80,220,120))
-        configStore.selected = name
-        persistConfigStore()
-    else
-        setStatus("Config not found: " .. name, Color3.fromRGB(220,80,80))
-    end
-end)
-
-local cfgResetBtn = makeActionBtn(configPage, 390, "Reset to Defaults", Color3.fromRGB(255,200,60))
-cfgResetBtn.MouseButton1Click:Connect(function()
-    autoCollect = true
-    heightFilterEnabled = true
-    MAX_EGG_HEIGHT = 150
-    syncUIFromVars()
-    -- Also refresh the Default config entry so it stays consistent.
-    if configStore and configStore.configs then
-        configStore.configs["Default"] = makeDefaultConfig()
-        configStore.selected = "Default"
-        selectedConfigName = "Default"
-        cfgSelectedBox.Text = "Default"
-        cfgNameBox.Text = "Default"
-        persistConfigStore()
-    end
-    setStatus("Defaults restored", Color3.fromRGB(255,200,60))
-end)
-
-configPage.CanvasSize = UDim2.new(0,0,0, 440)
-
 -- Perf toggle wiring
 lagToggleBtn.MouseButton1Click:Connect(function()
     local on = not lagGet()
@@ -1395,7 +1100,6 @@ local SIDEBAR_MIN_TOTAL = 38 + SIDEBAR_MIN_BODY + 22  -- topbar + body + statusb
 
 local TAB_HEIGHTS = {
     ESP    = math.max(38 + 290 + 22,       SIDEBAR_MIN_TOTAL),
-    Config = math.max(38 + 440 + 22,      SIDEBAR_MIN_TOTAL),
     Aura   = math.max(38 + (calY+50) + 22, SIDEBAR_MIN_TOTAL),
     Quests = math.max(38 + (qY+50) + 22,   SIDEBAR_MIN_TOTAL),
     Items  = math.max(38 + (iY+50) + 22,   SIDEBAR_MIN_TOTAL),
